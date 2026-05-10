@@ -1,16 +1,16 @@
 """
 Training CorticalNetwork on MNIST.
 Device priority: CUDA > MPS > CPU.
-CUDA optimizations: AMP (autocast + GradScaler), cudnn.benchmark,
+CUDA optimizations: bf16 autocast when available, cudnn.benchmark,
 pin_memory + non_blocking transfers, parallel DataLoader workers.
 """
 
 import numpy as np
 import torch
 import torch.nn as nn
+from contextlib import nullcontext
 from pathlib import Path
 from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
 
 from cortical_column.config import (
     BATCH_SIZE,
@@ -49,6 +49,13 @@ def get_dataloaders(
     """
     if val_batch_size is None:
         val_batch_size = batch_size * 2
+
+    try:
+        from torchvision import datasets, transforms
+    except ImportError as exc:
+        raise ImportError(
+            "torchvision is required to load MNIST. Install torchvision to run training."
+        ) from exc
 
     transform = transforms.Compose([
         transforms.ToTensor(),
@@ -92,9 +99,11 @@ def train() -> None:
         n_classes=N_CLASSES,
     ).to(device)
 
-    # torch.compile fuses ops into optimised CUDA kernels (PyTorch 2.0+)
-    if device.type == "cuda" and hasattr(torch, "compile"):
-        model = torch.compile(model)
+    # torch.compile is disabled by default because it can drop the _sparse_cache
+    # side effect used by l4_sparsity() and has been observed to destabilize this
+    # model under mixed precision. Re-enable only after replacing that cache with
+    # an explicit returned statistic and re-validating CUDA training.
+    # model = torch.compile(model)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
@@ -105,9 +114,16 @@ def train() -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     loss_fn = nn.CrossEntropyLoss()
 
-    # AMP: GradScaler prevents float16 underflow; disabled on MPS/CPU.
-    use_amp = device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    # Prefer bf16 on CUDA when available. float16 is numerically fragile for this
+    # model, so we fall back to plain fp32 unless bf16 is supported.
+    use_bf16_amp = device.type == "cuda" and torch.cuda.is_bf16_supported()
+
+    def maybe_autocast():
+        return (
+            torch.amp.autocast("cuda", dtype=torch.bfloat16)
+            if use_bf16_amp
+            else nullcontext()
+        )
 
     train_loader, val_loader = get_dataloaders(BATCH_SIZE, device, VAL_BATCH_SIZE)
 
@@ -125,20 +141,24 @@ def train() -> None:
 
             optimizer.zero_grad(set_to_none=True)  # faster than zero_grad()
 
-            with torch.amp.autocast("cuda", enabled=use_amp):
+            with maybe_autocast():
                 logits, _ = model(images)
                 loss = loss_fn(logits, labels)
 
-            if scaler:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)  # unscale before clipping so norms are in float32
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+            if not torch.isfinite(loss) and use_bf16_amp:
+                print("  [warn] non-finite bf16 loss, retrying batch in fp32")
+                with nullcontext():
+                    logits, _ = model(images)
+                    loss = loss_fn(logits, labels)
+
+            if not torch.isfinite(loss):
+                print(f"  [warn] non-finite loss={loss.item():.4f}, skipping batch")
+                optimizer.zero_grad(set_to_none=True)
+                continue
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
             train_loss += loss.item() * images.size(0)
             preds = logits.argmax(dim=1)
@@ -146,6 +166,9 @@ def train() -> None:
             train_total += images.size(0)
 
         scheduler.step()
+
+        if train_total == 0:
+            raise RuntimeError("No finite training batches were processed; check numerical stability.")
 
         train_loss /= train_total
         train_acc = train_correct / train_total
@@ -163,9 +186,18 @@ def train() -> None:
                 images = images.to(device, non_blocking=True)
                 labels = labels.to(device, non_blocking=True)
 
-                with torch.amp.autocast("cuda", enabled=use_amp):
+                with maybe_autocast():
                     logits, _ = model(images)
                     loss = loss_fn(logits, labels)
+
+                if not torch.isfinite(loss) and use_bf16_amp:
+                    with nullcontext():
+                        logits, _ = model(images)
+                        loss = loss_fn(logits, labels)
+
+                if not torch.isfinite(loss):
+                    print("  [warn] non-finite validation loss, skipping batch")
+                    continue
 
                 val_loss += loss.item() * images.size(0)
                 preds = logits.argmax(dim=1)
@@ -175,6 +207,9 @@ def train() -> None:
                 # K-WTA sparsity from L4 pre-projection cache (~0.25 = k/hidden_dim = 4/16)
                 mean_active_sum += model.l4_sparsity()
                 n_val_batches += 1
+
+        if val_total == 0 or n_val_batches == 0:
+            raise RuntimeError("No finite validation batches were processed; check numerical stability.")
 
         val_loss /= val_total
         val_acc = val_correct / val_total
@@ -201,7 +236,7 @@ def train() -> None:
     with torch.no_grad():
         for images, labels in val_loader:
             images = images.to(device, non_blocking=True)
-            with torch.amp.autocast("cuda", enabled=use_amp):
+            with maybe_autocast():
                 _, latents = model(images)
             all_latents.append(latents.cpu().numpy())
             all_labels.append(labels.numpy())

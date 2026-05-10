@@ -47,7 +47,7 @@ class L4Layer(nn.Module):
         self.proj = nn.Linear(concat_dim, L4_DIM)
         nn.init.kaiming_normal_(self.proj.weight, nonlinearity='relu')
 
-        self.norm = nn.LayerNorm(L4_DIM)
+        self.norm = nn.LayerNorm(L4_DIM, eps=1e-4)
         self.act = nn.ReLU()
 
     def forward(self, patch: Tensor) -> Tensor:
@@ -86,7 +86,7 @@ class L23Layer(nn.Module):
         self.proj_td = nn.Linear(L1_DIM, L23_DIM // 2)
         nn.init.kaiming_normal_(self.proj_td.weight, nonlinearity='relu')
 
-        self.norm = nn.LayerNorm(L23_DIM)
+        self.norm = nn.LayerNorm(L23_DIM, eps=1e-4)
         self.act = nn.ReLU()
 
         if use_lateral:
@@ -120,7 +120,7 @@ class L5Layer(nn.Module):
         self.proj = nn.Linear(L23_DIM + L6_DIM, L5_DIM)
         nn.init.kaiming_normal_(self.proj.weight, nonlinearity='relu')
 
-        self.norm = nn.LayerNorm(L5_DIM)
+        self.norm = nn.LayerNorm(L5_DIM, eps=1e-4)
         self.act = nn.GELU()
 
     def forward(self, x_l23: Tensor, x_feedback: Tensor) -> Tensor:

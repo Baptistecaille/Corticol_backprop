@@ -27,7 +27,8 @@ class MiniColumn(nn.Module):
         self.linear = nn.Linear(input_dim, hidden_dim)
         nn.init.kaiming_normal_(self.linear.weight, nonlinearity='relu')
 
-        self.norm = nn.LayerNorm(hidden_dim)  # LayerNorm: identical behaviour in train and eval
+        # eps=1e-4 (vs default 1e-5): guards against near-zero variance with small hidden_dim=16
+        self.norm = nn.LayerNorm(hidden_dim, eps=1e-4)
         self.relu = nn.ReLU()
 
     def kwta(self, x: Tensor) -> Tensor:

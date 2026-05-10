@@ -12,6 +12,8 @@ import torch
 import torch.nn as nn
 import pytest
 
+pytest.importorskip("torchvision")
+
 from cortical_column.config import (
     LATENT_DIM,
     N_CLASSES,
