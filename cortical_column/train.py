@@ -1,6 +1,8 @@
 """
 Training CorticalNetwork on MNIST.
-Device: MPS (Apple M1) with CPU fallback.
+Device priority: CUDA > MPS > CPU.
+CUDA optimizations: AMP (autocast + GradScaler), cudnn.benchmark,
+pin_memory + non_blocking transfers, parallel DataLoader workers.
 """
 
 import numpy as np
@@ -17,54 +19,53 @@ from cortical_column.config import (
     LR,
     N_CLASSES,
     N_PATCHES,
+    NUM_WORKERS,
     PATCH_SIZE,
 )
 from cortical_column.cortical_network import CorticalNetwork
 
 
 def get_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
 
 
-def get_dataloaders(batch_size: int) -> tuple[DataLoader, DataLoader]:
+def get_dataloaders(batch_size: int, device: torch.device) -> tuple[DataLoader, DataLoader]:
     """
     Download MNIST, return (train_loader, val_loader).
     Normalization: mean=0.1307, std=0.3081 (standard MNIST values).
+    pin_memory and num_workers are enabled only for CUDA for async host→device transfers.
     """
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),
     ])
 
-    train_dataset = datasets.MNIST(
-        root="data", train=True, download=True, transform=transform
-    )
-    val_dataset = datasets.MNIST(
-        root="data", train=False, download=True, transform=transform
+    train_dataset = datasets.MNIST(root="data", train=True,  download=True, transform=transform)
+    val_dataset   = datasets.MNIST(root="data", train=False, download=True, transform=transform)
+
+    use_cuda = device.type == "cuda"
+    kwargs = dict(
+        num_workers=NUM_WORKERS if use_cuda else 0,
+        pin_memory=use_cuda,
+        persistent_workers=use_cuda and NUM_WORKERS > 0,
     )
 
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=0,
-        pin_memory=False,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=0,
-        pin_memory=False,
-    )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  **kwargs)
+    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, **kwargs)
     return train_loader, val_loader
 
 
 def train() -> None:
     device = get_device()
     print(f"Using device: {device}")
+
+    # cudnn.benchmark lets cuDNN auto-tune convolution algorithms for fixed input sizes.
+    if device.type == "cuda":
+        torch.backends.cudnn.benchmark = True
 
     model = CorticalNetwork(
         n_columns=N_PATCHES,
@@ -73,11 +74,18 @@ def train() -> None:
         n_classes=N_CLASSES,
     ).to(device)
 
+    # Optional: uncomment for PyTorch 2.0+ graph compilation (significant speedup on CUDA)
+    # model = torch.compile(model)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     loss_fn = nn.CrossEntropyLoss()
 
-    train_loader, val_loader = get_dataloaders(BATCH_SIZE)
+    # AMP: GradScaler prevents underflow with float16; no-op on CPU/MPS.
+    use_amp = device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+
+    train_loader, val_loader = get_dataloaders(BATCH_SIZE, device)
 
     for epoch in range(EPOCHS):
         # ---- Training ----
@@ -87,14 +95,23 @@ def train() -> None:
         train_total = 0
 
         for images, labels in train_loader:
-            images = images.to(device)
-            labels = labels.to(device)
+            # non_blocking=True overlaps host→device transfer with GPU compute
+            images = images.to(device, non_blocking=True)
+            labels = labels.to(device, non_blocking=True)
 
-            optimizer.zero_grad()
-            logits, latents = model(images)
-            loss = loss_fn(logits, labels)
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)  # faster than zero_grad()
+
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                logits, _ = model(images)
+                loss = loss_fn(logits, labels)
+
+            if scaler:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
             train_loss += loss.item() * images.size(0)
             preds = logits.argmax(dim=1)
@@ -116,19 +133,19 @@ def train() -> None:
 
         with torch.no_grad():
             for images, labels in val_loader:
-                images = images.to(device)
-                labels = labels.to(device)
+                images = images.to(device, non_blocking=True)
+                labels = labels.to(device, non_blocking=True)
 
-                logits, latents = model(images)
-                loss = loss_fn(logits, labels)
+                with torch.amp.autocast("cuda", enabled=use_amp):
+                    logits, _ = model(images)
+                    loss = loss_fn(logits, labels)
 
                 val_loss += loss.item() * images.size(0)
                 preds = logits.argmax(dim=1)
                 val_correct += (preds == labels).sum().item()
                 val_total += images.size(0)
 
-                # K-WTA sparsity: reads pre-projection sparse cache from all L4 layers.
-                # Expected ~SPARSITY_K / MINICOLUMN_HIDDEN_DIM = 4/16 = 0.25.
+                # K-WTA sparsity from L4 pre-projection cache (~0.25 = k/hidden_dim = 4/16)
                 mean_active_sum += model.l4_sparsity()
                 n_val_batches += 1
 
@@ -156,19 +173,17 @@ def train() -> None:
 
     with torch.no_grad():
         for images, labels in val_loader:
-            images = images.to(device)
-            _, latents = model(images)
-            # Move to CPU before converting to numpy
+            images = images.to(device, non_blocking=True)
+            with torch.amp.autocast("cuda", enabled=use_amp):
+                _, latents = model(images)
             all_latents.append(latents.cpu().numpy())
             all_labels.append(labels.numpy())
 
     all_latents = np.concatenate(all_latents, axis=0)  # [N_test, 16, 128]
-    all_labels = np.concatenate(all_labels, axis=0)     # [N_test]
+    all_labels  = np.concatenate(all_labels,  axis=0)  # [N_test]
 
-    latents_path = repo_root / "test_latents.npy"
-    labels_path = repo_root / "test_labels.npy"
-    np.save(latents_path, all_latents)
-    np.save(labels_path, all_labels)
+    np.save(repo_root / "test_latents.npy", all_latents)
+    np.save(repo_root / "test_labels.npy",  all_labels)
     print(f"Test latents saved: {all_latents.shape}, labels: {all_labels.shape}")
 
 

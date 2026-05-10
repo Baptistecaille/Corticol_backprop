@@ -17,7 +17,8 @@ L6_DIM   = 64
 L1_DIM   = 32
 
 # Training hyperparameters
-BATCH_SIZE = 64
-LR         = 1e-3
-EPOCHS     = 20
-DEVICE     = "mps"   # fallback "cpu" if MPS unavailable
+BATCH_SIZE  = 64
+LR          = 1e-3
+EPOCHS      = 20
+DEVICE      = "cuda"  # auto-detected at runtime: cuda > mps > cpu
+NUM_WORKERS = 4       # parallel DataLoader workers; set to 0 for MPS/CPU

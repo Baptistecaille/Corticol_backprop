@@ -31,8 +31,8 @@ def device():
 
 
 @pytest.fixture(scope="module")
-def loaders():
-    return get_dataloaders(BATCH_SIZE)
+def loaders(device):
+    return get_dataloaders(BATCH_SIZE, device)
 
 
 @pytest.fixture(scope="function")
