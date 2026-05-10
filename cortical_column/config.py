@@ -19,6 +19,7 @@ L1_DIM   = 32
 # Training hyperparameters
 BATCH_SIZE      = 512   # large batch fully utilises GPU VRAM; scale down if OOM
 VAL_BATCH_SIZE  = 1024  # no gradients during val → fits 2× in same memory
+TRAIN_SUBSET    = 1000  # cap training set size for fast iteration; None = full 60 000
 LR              = 1e-3
 EPOCHS          = 20
 DEVICE          = "cuda"  # auto-detected at runtime: cuda > mps > cpu

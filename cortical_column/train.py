@@ -15,6 +15,7 @@ from torchvision import datasets, transforms
 from cortical_column.config import (
     BATCH_SIZE,
     VAL_BATCH_SIZE,
+    TRAIN_SUBSET,
     EPOCHS,
     LATENT_DIM,
     LR,
@@ -57,6 +58,10 @@ def get_dataloaders(
     train_dataset = datasets.MNIST(root="data", train=True,  download=True, transform=transform)
     val_dataset   = datasets.MNIST(root="data", train=False, download=True, transform=transform)
 
+    if TRAIN_SUBSET is not None:
+        indices = torch.randperm(len(train_dataset))[:TRAIN_SUBSET]
+        train_dataset = torch.utils.data.Subset(train_dataset, indices)
+
     use_cuda = device.type == "cuda"
     nw = NUM_WORKERS if use_cuda else 0
     cuda_kwargs = dict(
@@ -93,7 +98,8 @@ def train() -> None:
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
-    print(f"Train batch: {BATCH_SIZE}  |  Val batch: {VAL_BATCH_SIZE}  |  Workers: {NUM_WORKERS}")
+    train_size = TRAIN_SUBSET if TRAIN_SUBSET is not None else 60_000
+    print(f"Train batch: {BATCH_SIZE}  |  Val batch: {VAL_BATCH_SIZE}  |  Workers: {NUM_WORKERS}  |  Train samples: {train_size}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
