@@ -5,7 +5,7 @@ Runs 2 training batches + 1 validation batch to verify:
 - No runtime errors
 - Loss decreases between batch 1 and batch 2
 - Output shapes are correct
-- mean_active is in expected range (~1.0 for L5 GELU activations)
+- mean_active reports K-WTA sparsity ~0.25 (k=4 out of hidden_dim=16)
 """
 
 import torch
@@ -100,7 +100,7 @@ class TestSmokeTraining:
             f"Expected latents ({images.size(0)}, {N_PATCHES}, {LATENT_DIM}), got {latents.shape}"
 
     def test_mean_active_in_range(self, model_and_device, loaders):
-        """mean_active on L5 GELU outputs is always near 1.0, not 0.25. This test verifies the metric is in a valid range given the actual implementation."""
+        """mean_active reflects true K-WTA sparsity from L4 (k=4/hidden_dim=16 → ~0.25)."""
         model, device = model_and_device
         _, val_loader = loaders
 
@@ -109,13 +109,15 @@ class TestSmokeTraining:
         images = images.to(device)
 
         with torch.no_grad():
-            _, latents = model(images)
+            model(images)
 
-        mean_active = (latents != 0).float().mean().item()
+        mean_active = model.l4_sparsity()
 
-        # GELU activations are almost never exactly 0, so mean_active should be ~1.0
-        assert 0.9 <= mean_active <= 1.0, f"mean_active={mean_active} out of [0.9,1.0]"
-        print(f"\nSmoke test mean_active={mean_active:.3f} (expected ~1.0 for GELU)")
+        # Expected ~0.25 (k=4 out of MINICOLUMN_HIDDEN_DIM=16).
+        # ReLU upstream can further zero some units so allow [0.1, 0.4].
+        assert 0.1 <= mean_active <= 0.4, \
+            f"mean_active={mean_active:.3f} out of expected [0.1, 0.4] for K-WTA k=4/16"
+        print(f"\nSmoke test mean_active={mean_active:.3f} (expected ~0.25 for k=4/16)")
 
     def test_val_loss_finite(self, model_and_device, loaders):
         """Validation loss over one batch should be finite."""

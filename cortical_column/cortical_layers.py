@@ -55,6 +55,8 @@ class L4Layer(nn.Module):
         outputs = [mc(patch) for mc in self.minicolumns]
         # Concatenate: [B, N_MINICOLUMNS * MINICOLUMN_HIDDEN_DIM]
         x = torch.cat(outputs, dim=-1)
+        # Cache pre-projection sparse tensor for sparsity monitoring (detached, no grad)
+        self._sparse_cache: Tensor = x.detach()
         # Project -> norm -> activate
         x = self.proj(x)
         x = self.norm(x)

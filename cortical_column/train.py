@@ -127,17 +127,15 @@ def train() -> None:
                 val_correct += (preds == labels).sum().item()
                 val_total += images.size(0)
 
-                # NOTE: measures L5 (GELU) activation density — always near 1.0.
-                # True K-WTA sparsity (target ~0.25) lives in L4 MiniColumn outputs,
-                # not surfaced here. This metric will be removed/replaced in a future task.
-                mean_active_sum += (latents != 0).float().mean().item()
+                # K-WTA sparsity: reads pre-projection sparse cache from all L4 layers.
+                # Expected ~SPARSITY_K / MINICOLUMN_HIDDEN_DIM = 4/16 = 0.25.
+                mean_active_sum += model.l4_sparsity()
                 n_val_batches += 1
 
         val_loss /= val_total
         val_acc = val_correct / val_total
         mean_active = mean_active_sum / n_val_batches
 
-        # mean_active is L5 GELU density (not K-WTA sparsity metric)
         print(
             f"Epoch {epoch + 1}/{EPOCHS} | "
             f"train_loss={train_loss:.4f} | train_acc={train_acc:.4f} | "

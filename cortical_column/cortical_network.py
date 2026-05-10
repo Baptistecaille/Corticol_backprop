@@ -80,6 +80,20 @@ class CorticalNetwork(nn.Module):
         """
         return latents.mean(dim=1)
 
+    def l4_sparsity(self) -> float:
+        """
+        Return mean fraction of non-zero K-WTA activations across all L4 mini-columns.
+
+        Must be called after a forward pass — reads cached pre-projection sparse tensors
+        from each column's L4Layer. Expected value ~SPARSITY_K / MINICOLUMN_HIDDEN_DIM = 0.25.
+
+        Returns:
+            float in [0, 1] — mean active fraction per mini-column unit
+        """
+        sparse_list = [col.l4._sparse_cache for col in self.columns]
+        sparse = torch.stack(sparse_list, dim=1)  # [B, 16, N_MINICOLUMNS * MINICOLUMN_HIDDEN_DIM]
+        return (sparse != 0).float().mean().item()
+
     def forward(self, images: Tensor) -> tuple[Tensor, Tensor]:
         """
         Returns:
