@@ -40,9 +40,14 @@ class CorticalNetwork(nn.Module):
         n_classes: int = N_CLASSES,
     ):
         super().__init__()
+        n_patches_from_grid = (28 // patch_size) ** 2
+        assert n_columns == n_patches_from_grid, (
+            f"n_columns={n_columns} does not match grid patch count {n_patches_from_grid}"
+        )
         self.n_columns = n_columns
         self.patch_size = patch_size
         self.latent_dim = latent_dim
+        self.n_classes = n_classes
 
         self.columns = nn.ModuleList([
             CorticalColumn(patch_dim=patch_size ** 2, latent_dim=latent_dim)
@@ -56,9 +61,11 @@ class CorticalNetwork(nn.Module):
         Input  : [B, 1, 28, 28]
         Output : [B, 16, 49]
         """
+        assert images.shape[1:] == torch.Size([1, 28, 28]), \
+            f"Expected [B,1,28,28], got {tuple(images.shape)}"
         B = images.shape[0]
-        # unfold height (dim=2): size=7, step=7 -> [B, 1, 4, 28, 7]
-        # unfold width  (dim=3): size=7, step=7 -> [B, 1, 4, 4, 7, 7]
+        # unfold height (dim=2): size=7, step=7 -> [B, C, 4, W, 7] where W=28
+        # unfold width  (dim=3): size=7, step=7 -> [B, C, 4, 4, 7, 7]
         patches = images.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
         # patches: [B, 1, 4, 4, 7, 7]
         patches = patches.contiguous().view(B, -1, self.patch_size ** 2)
@@ -82,7 +89,7 @@ class CorticalNetwork(nn.Module):
         patches = self.extract_patches(images)          # [B, 16, 49]
         latents = []
         for i, col in enumerate(self.columns):
-            lat, _ = col(patches[:, i, :], top_down_signal=None)
+            lat, _ = col(patches[:, i, :], top_down_signal=None)  # l6 signal unused in stateless forward pass
             latents.append(lat)
         latents = torch.stack(latents, dim=1)           # [B, 16, 128]
         pooled = self.voting(latents)                   # [B, 128]
