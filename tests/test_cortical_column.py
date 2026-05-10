@@ -34,19 +34,6 @@ def device(request):
     return torch.device(request.param)
 
 
-# ---------------------------------------------------------------------------
-# Helper: check all parameter gradients are non-zero after backward
-# ---------------------------------------------------------------------------
-def _assert_grad_flow(module: torch.nn.Module, loss: torch.Tensor):
-    loss.backward()
-    for name, param in module.named_parameters():
-        if param.requires_grad:
-            assert param.grad is not None, f"No gradient for {name}"
-            assert param.grad.abs().sum().item() > 0, (
-                f"All-zero gradient for parameter {name}"
-            )
-
-
 # ===========================================================================
 # CorticalColumn
 # ===========================================================================
@@ -189,22 +176,21 @@ class TestCorticalColumn:
             assert latent.shape == (1, LATENT_DIM)
             assert l6_signal.shape == (1, L6_DIM)
 
-    def test_top_down_none_vs_zeros_differ(self, device):
-        """Passing None for top_down should give same result as passing explicit zeros
-        of shape [B, N_CLASSES], because L1(zeros) != zeros in general, but
-        top_down=None bypasses L1 and injects zeros directly into L2/3."""
+    def test_top_down_none_and_zeros_are_finite(self, device):
+        """Verify that both top_down=None and top_down=zeros produce finite outputs.
+
+        top_down=None injects zeros of size L1_DIM directly (skips L1 projection).
+        top_down=zeros passes zeros[N_CLASSES] through L1 linear layer.
+        Both paths should produce valid (non-NaN, non-Inf) outputs.
+        """
         model = CorticalColumn().to(device)
         model.eval()
         patch = torch.randn(BATCH, PATCH_DIM, device=device)
         with torch.no_grad():
             latent_none, _ = model(patch, top_down_signal=None)
-            # top_down=None injects zeros of size L1_DIM directly (skips L1 projection)
-            # whereas passing zeros[N_CLASSES] would go through L1 linear layer
             zeros_td = torch.zeros(BATCH, N_CLASSES, device=device)
             latent_zeros, _ = model(patch, top_down_signal=zeros_td)
-        # They should differ because L1(zeros) != zeros (bias term in L1.proj)
-        # Note: this test is informational — both paths are valid
-        # We just verify neither is NaN/Inf
+        # Both paths should produce finite outputs
         assert not torch.isnan(latent_none).any(), "latent_none contains NaN"
         assert not torch.isnan(latent_zeros).any(), "latent_zeros contains NaN"
         assert not torch.isinf(latent_none).any(), "latent_none contains Inf"

@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from cortical_column.config import L1_DIM, L6_DIM, N_CLASSES
+from cortical_column.config import L1_DIM, L6_DIM, N_CLASSES, PATCH_SIZE, LATENT_DIM
 from cortical_column.cortical_layers import L1Layer, L4Layer, L23Layer, L5Layer, L6Layer
 
 
@@ -27,6 +27,10 @@ class CorticalColumn(nn.Module):
 
     def __init__(self, patch_dim: int = 49, latent_dim: int = 128):
         super().__init__()
+        assert patch_dim == PATCH_SIZE ** 2, f"patch_dim must be {PATCH_SIZE**2}, got {patch_dim}"
+        assert latent_dim == LATENT_DIM, f"latent_dim must be {LATENT_DIM}, got {latent_dim}"
+        self.patch_dim = patch_dim
+        self.latent_dim = latent_dim
         self.l1  = L1Layer(input_dim=N_CLASSES)
         self.l4  = L4Layer()
         self.l23 = L23Layer()
@@ -41,7 +45,7 @@ class CorticalColumn(nn.Module):
         """
         Returns:
             latent    : Tensor[B, 128]  — main representation (L5)
-            l6_signal : Tensor[B, 64]   — L6 feedback signal
+            l6_signal : Tensor[B, 64]   — L6 output (to be used as feedback in recurrent extensions)
         """
         B = patch.shape[0]
 
