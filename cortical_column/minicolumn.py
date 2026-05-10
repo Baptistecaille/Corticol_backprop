@@ -27,7 +27,7 @@ class MiniColumn(nn.Module):
         self.linear = nn.Linear(input_dim, hidden_dim)
         nn.init.kaiming_normal_(self.linear.weight, nonlinearity='relu')
 
-        self.bn = nn.BatchNorm1d(hidden_dim)
+        self.norm = nn.LayerNorm(hidden_dim)  # LayerNorm: identical behaviour in train and eval
         self.relu = nn.ReLU()
 
     def kwta(self, x: Tensor) -> Tensor:
@@ -51,9 +51,9 @@ class MiniColumn(nn.Module):
         return output
 
     def forward(self, x: Tensor) -> Tensor:
-        # Linear -> BatchNorm -> ReLU -> K-WTA
+        # Linear -> LayerNorm -> ReLU -> K-WTA
         x = self.linear(x)
-        x = self.bn(x)
+        x = self.norm(x)
         x = self.relu(x)
         x = self.kwta(x)
         return x

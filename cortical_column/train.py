@@ -131,10 +131,13 @@ def train() -> None:
 
             if scaler:
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)  # unscale before clipping so norms are in float32
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
 
             train_loss += loss.item() * images.size(0)

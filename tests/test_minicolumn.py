@@ -40,7 +40,7 @@ def test_output_shape(model, sample_input):
 # ------------------------------------------------------------------
 # Test 2: sparsity – at most k non-zero values per sample
 #
-# Pipeline: Linear -> BatchNorm -> ReLU -> K-WTA
+# Pipeline: Linear -> LayerNorm -> ReLU -> K-WTA
 # ReLU may zero some pre-K-WTA activations, so the true non-zero count
 # is min(k, number_of_relu_survivors) <= k.
 # We use a larger hidden_dim (hidden_dim > k) to guarantee exactly k
@@ -95,7 +95,7 @@ def test_gradients_flow():
 
     # Manually run forward up to kwta to inspect the mask
     with torch.no_grad():
-        h = mc2.relu(mc2.bn(mc2.linear(x2)))
+        h = mc2.relu(mc2.norm(mc2.linear(x2)))
         topk_vals, topk_idx = torch.topk(h, 4, dim=-1)
         mask = torch.zeros_like(h).scatter_(-1, topk_idx, 1.0)
         # Confirm there are zeroed positions (inactive units)
