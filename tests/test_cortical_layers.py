@@ -156,6 +156,7 @@ class TestL5Layer:
         x_fb = torch.randn(BATCH, L6_DIM, device=device)
         out = model(x_l23, x_fb)
         assert out.data_ptr() != x_l23.data_ptr()
+        assert out.data_ptr() != x_fb.data_ptr()
 
 
 # ===========================================================================

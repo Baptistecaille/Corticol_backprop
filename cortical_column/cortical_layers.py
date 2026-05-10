@@ -64,9 +64,9 @@ class L4Layer(nn.Module):
 
 class L23Layer(nn.Module):
     """
-    Fuses bottom-up (L4) and top-down (L1) signals.
-    Computes residual: difference between top-down prediction and bottom-up reality.
-    Optional lateral propagation.
+    Fuses bottom-up (L4) and top-down (L1) signals via separate linear projections
+    concatenated together. Includes an optional lateral recurrent connection
+    (residual add) for within-layer propagation.
 
     forward(
         x_bottom_up: Tensor[B, L4_DIM],
