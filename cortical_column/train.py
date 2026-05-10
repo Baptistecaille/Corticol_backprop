@@ -14,12 +14,14 @@ from torchvision import datasets, transforms
 
 from cortical_column.config import (
     BATCH_SIZE,
+    VAL_BATCH_SIZE,
     EPOCHS,
     LATENT_DIM,
     LR,
     N_CLASSES,
     N_PATCHES,
     NUM_WORKERS,
+    PREFETCH_FACTOR,
     PATCH_SIZE,
 )
 from cortical_column.cortical_network import CorticalNetwork
@@ -33,12 +35,20 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def get_dataloaders(batch_size: int, device: torch.device) -> tuple[DataLoader, DataLoader]:
+def get_dataloaders(
+    batch_size: int,
+    device: torch.device,
+    val_batch_size: int | None = None,
+) -> tuple[DataLoader, DataLoader]:
     """
     Download MNIST, return (train_loader, val_loader).
-    Normalization: mean=0.1307, std=0.3081 (standard MNIST values).
-    pin_memory and num_workers are enabled only for CUDA for async host→device transfers.
+    Normalization: mean=0.1307, std=0.3081.
+    val_batch_size defaults to 2× batch_size (no gradients → fits more in VRAM).
+    pin_memory, num_workers, and prefetch_factor are enabled for CUDA only.
     """
+    if val_batch_size is None:
+        val_batch_size = batch_size * 2
+
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Normalize((0.1307,), (0.3081,)),
@@ -48,14 +58,16 @@ def get_dataloaders(batch_size: int, device: torch.device) -> tuple[DataLoader, 
     val_dataset   = datasets.MNIST(root="data", train=False, download=True, transform=transform)
 
     use_cuda = device.type == "cuda"
-    kwargs = dict(
-        num_workers=NUM_WORKERS if use_cuda else 0,
+    nw = NUM_WORKERS if use_cuda else 0
+    cuda_kwargs = dict(
+        num_workers=nw,
         pin_memory=use_cuda,
-        persistent_workers=use_cuda and NUM_WORKERS > 0,
+        persistent_workers=use_cuda and nw > 0,
+        prefetch_factor=PREFETCH_FACTOR if (use_cuda and nw > 0) else None,
     )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True,  **kwargs)
-    val_loader   = DataLoader(val_dataset,   batch_size=batch_size, shuffle=False, **kwargs)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size,     shuffle=True,  **cuda_kwargs)
+    val_loader   = DataLoader(val_dataset,   batch_size=val_batch_size, shuffle=False, **cuda_kwargs)
     return train_loader, val_loader
 
 
@@ -63,9 +75,10 @@ def train() -> None:
     device = get_device()
     print(f"Using device: {device}")
 
-    # cudnn.benchmark lets cuDNN auto-tune convolution algorithms for fixed input sizes.
     if device.type == "cuda":
         torch.backends.cudnn.benchmark = True
+        free, total = torch.cuda.mem_get_info()
+        print(f"GPU RAM: {(total - free) / 1e9:.1f} / {total / 1e9:.1f} GB free")
 
     model = CorticalNetwork(
         n_columns=N_PATCHES,
@@ -74,18 +87,23 @@ def train() -> None:
         n_classes=N_CLASSES,
     ).to(device)
 
-    # Optional: uncomment for PyTorch 2.0+ graph compilation (significant speedup on CUDA)
-    # model = torch.compile(model)
+    # torch.compile fuses ops into optimised CUDA kernels (PyTorch 2.0+)
+    if device.type == "cuda" and hasattr(torch, "compile"):
+        model = torch.compile(model)
+
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"Model parameters: {n_params:,}")
+    print(f"Train batch: {BATCH_SIZE}  |  Val batch: {VAL_BATCH_SIZE}  |  Workers: {NUM_WORKERS}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     loss_fn = nn.CrossEntropyLoss()
 
-    # AMP: GradScaler prevents underflow with float16; no-op on CPU/MPS.
+    # AMP: GradScaler prevents float16 underflow; disabled on MPS/CPU.
     use_amp = device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda") if use_amp else None
 
-    train_loader, val_loader = get_dataloaders(BATCH_SIZE, device)
+    train_loader, val_loader = get_dataloaders(BATCH_SIZE, device, VAL_BATCH_SIZE)
 
     for epoch in range(EPOCHS):
         # ---- Training ----

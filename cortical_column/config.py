@@ -17,8 +17,10 @@ L6_DIM   = 64
 L1_DIM   = 32
 
 # Training hyperparameters
-BATCH_SIZE  = 64
-LR          = 1e-3
-EPOCHS      = 20
-DEVICE      = "cuda"  # auto-detected at runtime: cuda > mps > cpu
-NUM_WORKERS = 4       # parallel DataLoader workers; set to 0 for MPS/CPU
+BATCH_SIZE      = 512   # large batch fully utilises GPU VRAM; scale down if OOM
+VAL_BATCH_SIZE  = 1024  # no gradients during val → fits 2× in same memory
+LR              = 1e-3
+EPOCHS          = 20
+DEVICE          = "cuda"  # auto-detected at runtime: cuda > mps > cpu
+NUM_WORKERS     = 8       # parallel DataLoader workers; set to 0 for MPS/CPU
+PREFETCH_FACTOR = 4       # batches queued ahead per worker (CUDA only)

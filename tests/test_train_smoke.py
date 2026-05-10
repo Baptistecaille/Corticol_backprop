@@ -32,7 +32,8 @@ def device():
 
 @pytest.fixture(scope="module")
 def loaders(device):
-    return get_dataloaders(BATCH_SIZE, device)
+    # Use same batch size for train and val in smoke tests (no need for the 2× val size)
+    return get_dataloaders(BATCH_SIZE, device, val_batch_size=BATCH_SIZE)
 
 
 @pytest.fixture(scope="function")
