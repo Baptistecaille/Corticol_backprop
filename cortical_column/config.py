@@ -6,6 +6,7 @@ N_PATCHES      = 16      # 4×4 grid on 28×28 image
 N_MINICOLUMNS  = 16      # mini-columns per cortical column
 LATENT_DIM     = 128     # latent vector dimension (L5 output)
 SPARSITY_K     = 4       # K-WTA: top-k activations kept per mini-column
+MINICOLUMN_HIDDEN_DIM = 16  # internal dim per mini-column; must be > SPARSITY_K
 N_CLASSES      = 10      # MNIST
 
 # Internal layer dimensions

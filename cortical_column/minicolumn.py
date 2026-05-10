@@ -18,6 +18,9 @@ class MiniColumn(nn.Module):
 
     def __init__(self, input_dim: int, hidden_dim: int, k: int):
         super().__init__()
+        assert k < hidden_dim, (
+            f"k ({k}) must be < hidden_dim ({hidden_dim}) for sparsity to have effect"
+        )
         self.k = k
         self.hidden_dim = hidden_dim
 
@@ -31,18 +34,19 @@ class MiniColumn(nn.Module):
         """
         K-Winner-Take-All: keeps the k highest values,
         zeros the rest. Differentiable via straight-through estimator.
-        """
-        # Find the k-th largest value per sample
-        topk_vals, _ = torch.topk(x, self.k, dim=-1)
-        # Threshold: smallest of the top-k values
-        threshold = topk_vals[..., -1].unsqueeze(-1)
 
-        # Hard mask: 1 where value >= threshold, 0 elsewhere
-        mask = (x >= threshold).float()
+        Uses scatter-based masking to guarantee exactly k active units,
+        avoiding the tie-breaking issue of threshold >= comparisons.
+        """
+        topk_vals, topk_idx = torch.topk(x, self.k, dim=-1)
+        # Build a binary mask with exactly k ones per row
+        mask = torch.zeros_like(x).scatter_(-1, topk_idx, 1.0)
+
+        # Sparse forward value
+        sparse = x * mask
 
         # Straight-through estimator: forward uses sparse output,
         # backward passes gradient as if all units were active
-        sparse = x * mask
         output = x + (sparse - x).detach()
         return output
 
