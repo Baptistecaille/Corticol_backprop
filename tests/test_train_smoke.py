@@ -5,7 +5,7 @@ Runs 2 training batches + 1 validation batch to verify:
 - No runtime errors
 - Loss decreases between batch 1 and batch 2
 - Output shapes are correct
-- mean_active is in expected range (~0.25 for K=4, hidden=16)
+- mean_active is in expected range (~1.0 for L5 GELU activations)
 """
 
 import torch
@@ -35,7 +35,7 @@ def loaders():
     return get_dataloaders(BATCH_SIZE)
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="function")
 def model_and_device(device):
     model = CorticalNetwork(
         n_columns=N_PATCHES,
@@ -100,7 +100,7 @@ class TestSmokeTraining:
             f"Expected latents ({images.size(0)}, {N_PATCHES}, {LATENT_DIM}), got {latents.shape}"
 
     def test_mean_active_in_range(self, model_and_device, loaders):
-        """mean_active should be ~0.25 (K=4 out of hidden_dim=16)."""
+        """mean_active on L5 GELU outputs is always near 1.0, not 0.25. This test verifies the metric is in a valid range given the actual implementation."""
         model, device = model_and_device
         _, val_loader = loaders
 
@@ -113,9 +113,9 @@ class TestSmokeTraining:
 
         mean_active = (latents != 0).float().mean().item()
 
-        # Expected ~0.25; allow a generous range given random initialization
-        assert 0.0 <= mean_active <= 1.0, f"mean_active={mean_active} out of [0,1]"
-        print(f"\nSmoke test mean_active={mean_active:.3f} (expected ~0.25)")
+        # GELU activations are almost never exactly 0, so mean_active should be ~1.0
+        assert 0.9 <= mean_active <= 1.0, f"mean_active={mean_active} out of [0.9,1.0]"
+        print(f"\nSmoke test mean_active={mean_active:.3f} (expected ~1.0 for GELU)")
 
     def test_val_loss_finite(self, model_and_device, loaders):
         """Validation loss over one batch should be finite."""

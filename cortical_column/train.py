@@ -6,6 +6,7 @@ Device: MPS (Apple M1) with CPU fallback.
 import numpy as np
 import torch
 import torch.nn as nn
+from pathlib import Path
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
@@ -126,7 +127,9 @@ def train() -> None:
                 val_correct += (preds == labels).sum().item()
                 val_total += images.size(0)
 
-                # latents: [B, 16, 128] — fraction of non-zero activations
+                # NOTE: measures L5 (GELU) activation density — always near 1.0.
+                # True K-WTA sparsity (target ~0.25) lives in L4 MiniColumn outputs,
+                # not surfaced here. This metric will be removed/replaced in a future task.
                 mean_active_sum += (latents != 0).float().mean().item()
                 n_val_batches += 1
 
@@ -134,6 +137,7 @@ def train() -> None:
         val_acc = val_correct / val_total
         mean_active = mean_active_sum / n_val_batches
 
+        # mean_active is L5 GELU density (not K-WTA sparsity metric)
         print(
             f"Epoch {epoch + 1}/{EPOCHS} | "
             f"train_loss={train_loss:.4f} | train_acc={train_acc:.4f} | "
@@ -142,8 +146,10 @@ def train() -> None:
         )
 
     # ---- Save model checkpoint ----
-    torch.save(model.state_dict(), "cortical_network_mnist.pt")
-    print("Model checkpoint saved to cortical_network_mnist.pt")
+    repo_root = Path(__file__).resolve().parent.parent
+    checkpoint_path = repo_root / "cortical_network_mnist.pt"
+    torch.save(model.state_dict(), checkpoint_path)
+    print(f"Model checkpoint saved to {checkpoint_path}")
 
     # ---- Save test latents for UMAP visualization ----
     model.eval()
@@ -161,8 +167,10 @@ def train() -> None:
     all_latents = np.concatenate(all_latents, axis=0)  # [N_test, 16, 128]
     all_labels = np.concatenate(all_labels, axis=0)     # [N_test]
 
-    np.save("test_latents.npy", all_latents)
-    np.save("test_labels.npy", all_labels)
+    latents_path = repo_root / "test_latents.npy"
+    labels_path = repo_root / "test_labels.npy"
+    np.save(latents_path, all_latents)
+    np.save(labels_path, all_labels)
     print(f"Test latents saved: {all_latents.shape}, labels: {all_labels.shape}")
 
 
