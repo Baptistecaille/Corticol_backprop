@@ -47,7 +47,7 @@ def test_output_shape(model, sample_input):
 # non-zero outputs without ReLU interference.
 # ------------------------------------------------------------------
 def test_sparsity():
-    """With hidden_dim > k, K-WTA must keep exactly k non-zero values."""
+    """With hidden_dim > k, K-WTA must keep at most k non-zero values."""
     hidden_dim = 16  # clearly larger than k=4
     k = 4
     mc = MiniColumn(input_dim=INPUT_DIM, hidden_dim=hidden_dim, k=k)
@@ -136,7 +136,7 @@ def test_kwta_standalone():
 # Test 5: no in-place ops – verify output != input tensor identity
 # (catches += style bugs that would break MPS)
 # ------------------------------------------------------------------
-def test_no_inplace(model, sample_input):
+def test_no_inplace(model):
     x = torch.randn(BATCH_SIZE, INPUT_DIM)
     out = model(x)
     # Simply ensure forward returns a new tensor (not same storage)

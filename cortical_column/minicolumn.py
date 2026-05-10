@@ -25,7 +25,7 @@ class MiniColumn(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.linear = nn.Linear(input_dim, hidden_dim)
-        nn.init.kaiming_normal_(self.linear.weight)
+        nn.init.kaiming_normal_(self.linear.weight, nonlinearity='relu')
 
         self.bn = nn.BatchNorm1d(hidden_dim)
         self.relu = nn.ReLU()
