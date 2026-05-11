@@ -25,17 +25,20 @@ from cortical_column.minicolumn import MiniColumn
 
 class L4Layer(nn.Module):
     """
-    Primary input layer. Receives flattened patch (PATCH_SIZE²=49 dims).
+    Primary input layer. Receives a flattened patch of arbitrary dimension.
     Projects via N_MINICOLUMNS MiniColumns in parallel, aggregates sparse outputs.
 
-    forward(patch: Tensor[B, 49]) -> Tensor[B, L4_DIM]
+    Default patch_dim = PATCH_SIZE² = 49  (MNIST, grayscale 7×7).
+    For CIFAR-10 (RGB 8×8): patch_dim = 8² × 3 = 192.
+
+    forward(patch: Tensor[B, patch_dim]) -> Tensor[B, L4_DIM]
     """
 
-    def __init__(self):
+    def __init__(self, patch_dim: int = PATCH_SIZE ** 2):
         super().__init__()
         self.minicolumns = nn.ModuleList([
             MiniColumn(
-                input_dim=PATCH_SIZE ** 2,
+                input_dim=patch_dim,
                 hidden_dim=MINICOLUMN_HIDDEN_DIM,
                 k=SPARSITY_K,
             )

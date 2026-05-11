@@ -8,31 +8,30 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from cortical_column.config import L1_DIM, L6_DIM, N_CLASSES, PATCH_SIZE, LATENT_DIM
+from cortical_column.config import L1_DIM, L6_DIM, N_CLASSES, LATENT_DIM
 from cortical_column.cortical_layers import L1Layer, L4Layer, L23Layer, L5Layer, L6Layer
 
 
 class CorticalColumn(nn.Module):
     """
     Assembles the 6 layers in biological processing order.
-    Receives a flattened 7×7 patch, produces a latent vector ∈ ℝ¹²⁸.
+    Receives a flattened patch of any dimension, produces a latent vector ∈ ℝ¹²⁸.
 
     Information flow:
         patch → L4 → L2/3(+L1 feedback) → L5(+L6 feedback) → L6 → latent
 
     Args:
-        patch_dim  : flattened patch dimension (49)
+        patch_dim  : flattened patch dimension (49 for MNIST, 192 for CIFAR-10 RGB 8×8)
         latent_dim : latent vector output dimension (128)
     """
 
     def __init__(self, patch_dim: int = 49, latent_dim: int = 128):
         super().__init__()
-        assert patch_dim == PATCH_SIZE ** 2, f"patch_dim must be {PATCH_SIZE**2}, got {patch_dim}"
         assert latent_dim == LATENT_DIM, f"latent_dim must be {LATENT_DIM}, got {latent_dim}"
         self.patch_dim = patch_dim
         self.latent_dim = latent_dim
         self.l1  = L1Layer(input_dim=N_CLASSES)
-        self.l4  = L4Layer()
+        self.l4  = L4Layer(patch_dim=patch_dim)
         self.l23 = L23Layer()
         self.l5  = L5Layer()
         self.l6  = L6Layer()

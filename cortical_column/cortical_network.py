@@ -1,10 +1,11 @@
-"""CorticalNetwork: orchestrates 16 cortical columns over 16 patches of an MNIST image.
+"""CorticalNetwork: orchestrates N cortical columns over N patches of an image.
 
 Each column is specialized for its own spatial region (no weight sharing).
 Aggregates latents via mean pooling and classifies via a linear head.
 
-Future: remove the classification head and use latents directly as
-encoder for I-JEPA.
+Supports any image resolution and channel count:
+  - MNIST    : image_size=28, n_channels=1, patch_size=7  → 16 patches of  49 dims
+  - CIFAR-10 : image_size=32, n_channels=3, patch_size=8  → 16 patches of 192 dims
 """
 
 import torch
@@ -17,65 +18,68 @@ from cortical_column.cortical_column import CorticalColumn
 
 class CorticalNetwork(nn.Module):
     """
-    Orchestrates 16 cortical columns over the 16 patches of an MNIST image.
+    Orchestrates N cortical columns over N patches of an image.
     Aggregates latents via mean pooling and classifies via a linear head.
 
     Each column is specialized for its spatial region (NO weight sharing).
 
-    Future: remove the classification head and use latents directly as
-    encoder for I-JEPA.
-
     Args:
-        n_columns  : 16
-        patch_size : 7
-        latent_dim : 128
-        n_classes  : 10
+        n_columns  : number of columns = number of patches (16)
+        patch_size : patch side length in pixels (7 for MNIST, 8 for CIFAR-10)
+        n_channels : input image channels (1 = grayscale, 3 = RGB)
+        latent_dim : column latent dimension (128)
+        n_classes  : number of output classes (10)
     """
 
     def __init__(
         self,
         n_columns: int = N_PATCHES,
         patch_size: int = PATCH_SIZE,
+        n_channels: int = 1,
         latent_dim: int = LATENT_DIM,
         n_classes: int = N_CLASSES,
     ):
         super().__init__()
-        n_patches_from_grid = (28 // patch_size) ** 2
-        assert n_columns == n_patches_from_grid, (
-            f"n_columns={n_columns} does not match grid patch count {n_patches_from_grid}"
-        )
         self.n_columns = n_columns
         self.patch_size = patch_size
+        self.n_channels = n_channels
         self.latent_dim = latent_dim
         self.n_classes = n_classes
 
+        patch_dim = patch_size ** 2 * n_channels   # 49 (MNIST) or 192 (CIFAR-10)
         self.columns = nn.ModuleList([
-            CorticalColumn(patch_dim=patch_size ** 2, latent_dim=latent_dim)
+            CorticalColumn(patch_dim=patch_dim, latent_dim=latent_dim)
             for _ in range(n_columns)
         ])
         self.classifier = nn.Linear(latent_dim, n_classes)
 
     def extract_patches(self, images: Tensor) -> Tensor:
         """
-        Slice images into 16 patches of 7x7.
-        Input  : [B, 1, 28, 28]
-        Output : [B, 16, 49]
+        Slice images into non-overlapping patches (row-major order).
+
+        Input  : [B, C, H, W]
+        Output : [B, n_patches, C × patch_size²]
+
+        Works for any (H, W, C, patch_size) — MNIST and CIFAR-10.
         """
-        assert images.shape[1:] == torch.Size([1, 28, 28]), \
-            f"Expected [B,1,28,28], got {tuple(images.shape)}"
-        B = images.shape[0]
-        # unfold height (dim=2): size=7, step=7 -> [B, C, 4, W, 7] where W=28
-        # unfold width  (dim=3): size=7, step=7 -> [B, C, 4, 4, 7, 7]
-        patches = images.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
-        # patches: [B, 1, 4, 4, 7, 7]
-        patches = patches.contiguous().view(B, -1, self.patch_size ** 2)
-        # patches: [B, 16, 49]
-        return patches
+        B, C, H, W = images.shape
+        ps = self.patch_size
+        # unfold spatial dims → [B, C, n_h, n_w, ps, ps]
+        patches = (
+            images
+            .unfold(2, ps, ps)   # height → [B, C, n_h, W, ps]
+            .unfold(3, ps, ps)   # width  → [B, C, n_h, n_w, ps, ps]
+        )
+        n_h, n_w = patches.shape[2], patches.shape[3]
+        # reorder: [B, n_h, n_w, C, ps, ps] so channels merge cleanly with spatial
+        patches = patches.permute(0, 2, 3, 1, 4, 5).contiguous()
+        # flatten to [B, n_h*n_w, C*ps*ps]
+        return patches.view(B, n_h * n_w, C * ps * ps)
 
     def voting(self, latents: Tensor) -> Tensor:
         """
-        Mean pooling over the 16 column latents.
-        Input  : [B, 16, 128]
+        Mean pooling over the N column latents.
+        Input  : [B, N, 128]
         Output : [B, 128]
         """
         return latents.mean(dim=1)
@@ -86,26 +90,23 @@ class CorticalNetwork(nn.Module):
 
         Must be called after a forward pass — reads cached pre-projection sparse tensors
         from each column's L4Layer. Expected value ~SPARSITY_K / MINICOLUMN_HIDDEN_DIM = 0.25.
-
-        Returns:
-            float in [0, 1] — mean active fraction per mini-column unit
         """
         sparse_list = [col.l4._sparse_cache for col in self.columns]
-        sparse = torch.stack(sparse_list, dim=1)  # [B, 16, N_MINICOLUMNS * MINICOLUMN_HIDDEN_DIM]
+        sparse = torch.stack(sparse_list, dim=1)  # [B, N, N_MINICOLUMNS * MINICOLUMN_HIDDEN_DIM]
         return (sparse != 0).float().mean().item()
 
     def forward(self, images: Tensor) -> tuple[Tensor, Tensor]:
         """
         Returns:
-            logits  : Tensor[B, 10]      -- for MNIST loss
-            latents : Tensor[B, 16, 128] -- for JEPA later
+            logits  : Tensor[B, n_classes]   -- classification head
+            latents : Tensor[B, n_columns, latent_dim] -- per-column representations
         """
-        patches = self.extract_patches(images)          # [B, 16, 49]
+        patches = self.extract_patches(images)              # [B, N, patch_dim]
         latents = []
         for i, col in enumerate(self.columns):
-            lat, _ = col(patches[:, i, :], top_down_signal=None)  # l6 signal unused in stateless forward pass
+            lat, _ = col(patches[:, i, :], top_down_signal=None)
             latents.append(lat)
-        latents = torch.stack(latents, dim=1)           # [B, 16, 128]
-        pooled = self.voting(latents)                   # [B, 128]
-        logits = self.classifier(pooled)                # [B, 10]
+        latents = torch.stack(latents, dim=1)               # [B, N, 128]
+        pooled  = self.voting(latents)                      # [B, 128]
+        logits  = self.classifier(pooled)                   # [B, n_classes]
         return logits, latents
